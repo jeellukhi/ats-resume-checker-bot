@@ -1,0 +1,27 @@
+# ==============================================================================
+# ATS Resume Checker Bot — Pinned Dependencies
+# ==============================================================================
+# Install with:  pip install -r requirements.txt
+# ==============================================================================
+
+# --- Telegram Bot Framework ---
+python-telegram-bot>=20.7,<22.0   # Async bot framework (v20+ required for async)
+
+# --- Environment & Config ---
+python-dotenv>=1.0.0               # Loads .env file into os.environ
+
+# --- LLM Providers ---
+google-genai>=1.0.0                # Google Gemini SDK (recommended — free tier available)
+anthropic>=0.25.0                  # Anthropic Claude SDK (optional — needed if LLM_PROVIDER=anthropic)
+openai>=1.30.0                     # OpenAI SDK (optional — needed if LLM_PROVIDER=openai)
+
+# --- Resume Parsing ---
+pdfplumber>=0.10.0                 # Primary PDF text extraction (layout-aware)
+PyPDF2>=3.0.0                      # Fallback PDF parser
+python-docx>=1.1.0                 # DOCX file parsing
+
+# ==============================================================================
+# Optional — only needed if you want to run PDF generation in tests
+# ==============================================================================
+# reportlab>=4.0.0                 # Used in tests to generate test PDFs
+# fpdf2>=2.7.0                     # Alternative PDF generation for tests
