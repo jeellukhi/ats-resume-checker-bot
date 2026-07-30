@@ -2,17 +2,20 @@
 handlers.py — All Telegram command and message handlers.
 
 Each handler corresponds to one step in the conversation flow:
-  /start      → start_handler        (explains the bot)
-  /check      → check_handler        (begins a new evaluation session)
-  /done       → done_handler         (signals end of resume uploads)
-  /cancel     → cancel_handler       (aborts the current session)
-  /history    → history_handler      (shows past scored resumes)
-  /help       → help_handler         (usage help)
+  /start      -> start_handler        (explains the bot)
+  /check      -> check_handler        (begins a new evaluation session)
+  /done       -> done_handler         (signals end of resume uploads, enters chat mode)
+  /ask        -> ask_handler          (ask a question during or after analysis)
+  /exit       -> exit_handler         (exit chat mode and clear session)
+  /cancel     -> cancel_handler       (aborts the current session)
+  /history    -> history_handler      (shows past scored resumes)
+  /help       -> help_handler         (usage help)
 
   Message handlers (within the conversation):
   - JD input   (text or file)
   - Resume input (text or file, multiple allowed)
   - Follow-up question answers
+  - Free-form chat in WAITING_FOR_CHAT state
 """
 
 import logging
@@ -32,6 +35,7 @@ from bot.conversation import (
     WAITING_FOR_JD,
     WAITING_FOR_RESUMES,
     WAITING_FOR_FOLLOWUP,
+    WAITING_FOR_CHAT,
     get_session,
     reset_session,
     clear_session,
@@ -41,7 +45,10 @@ from core.scorer import (
     process_resume_text,
     format_comparison_summary,
 )
-from core.llm_client import get_followup_acknowledgement
+from core.llm_client import (
+    get_followup_acknowledgement,
+    answer_resume_question,
+)
 from db.storage import (
     create_session as db_create_session,
     save_resume_result,
@@ -103,11 +110,14 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "  • Give concrete, actionable improvement suggestions\n"
         "  • Recommend courses to fill skill gaps\n"
         "  • Ask follow-up questions to strengthen your profile\n"
-        "  • Compare multiple resume versions side by side\n\n"
+        "  • Compare multiple resume versions side by side\n"
+        "  • 💬 *Answer your resume & career questions after analysis*\n\n"
         "🚀 *Commands:*\n"
         "  /check — Start a new resume evaluation\n"
+        "  /ask — Ask a question about your resume (after analysis)\n"
         "  /history — View your past scored resumes\n"
         "  /cancel — Cancel the current session\n"
+        "  /exit — Exit chat mode\n"
         "  /help — Show usage guide\n\n"
         "Type /check to get started! 🎯"
     )
@@ -135,8 +145,15 @@ async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "course recommendations, and follow-up questions for each resume.\n\n"
         "*Step 5 — Answer Follow-ups (optional)*\n"
         "Reply to my follow-up questions to get personalized advice.\n\n"
+        "*Step 6 — 💬 Ask Me Anything!*\n"
+        "After typing /done, ask me any question about your resume:\n"
+        "  • \"How can I rewrite my summary for this role?\"\n"
+        "  • \"What skills should I add?\"\n"
+        "  • \"Can you write a better bullet point for my experience?\"\n"
+        "During resume upload, use */ask <your question>*\n\n"
         "📋 */history* — See your last 10 scored resumes.\n"
-        "🚫 */cancel* — Abort the current session at any time.\n\n"
+        "🚫 */cancel* — Abort the current session at any time.\n"
+        "🚪 */exit* — Exit chat mode and clear the session.\n\n"
         "💡 *Tips:*\n"
         "  • Use text-selectable PDFs (not scanned images)\n"
         "  • Files must be under 10 MB\n"
@@ -261,6 +278,7 @@ async def _jd_received(
         "  • Paste resume text directly in chat\n\n"
         "You can send *multiple resumes* one by one to compare them.\n"
         "When you're done, type */done* to see the results.\n\n"
+        "💬 You can also use */ask <your question>* at any time to ask about your resume.\n\n"
         "Or type /cancel to abort.",
     )
     return WAITING_FOR_RESUMES
@@ -292,7 +310,7 @@ async def resume_text_handler(
     )
 
     try:
-        message, result = await process_resume_text(
+        message, result, resume_text = await process_resume_text(
             resume_text=text,
             job_description=session.job_description,
             resume_label=label,
@@ -309,8 +327,9 @@ async def resume_text_handler(
         session.resume_counter -= 1
         return WAITING_FOR_RESUMES
 
-    # Store result in memory and DB
+    # Store result and extracted text in memory and DB
     session.resumes.append({"label": label, "result": result})
+    session.resume_texts.append(resume_text)
     if session.db_session_id:
         save_resume_result(session.db_session_id, user_id, label, result)
 
@@ -325,7 +344,8 @@ async def resume_text_handler(
 
     await _safe_reply(
         update,
-        "Send another resume, or type */done* to finish.",
+        "Send another resume, or type */done* to finish.\n"
+        "💬 You can also use */ask <question>* to ask anything about your resume.",
     )
     return WAITING_FOR_RESUMES
 
@@ -358,7 +378,7 @@ async def resume_file_handler(
 
     try:
         file_bytes = await _download_file(document, context)
-        message, result = await process_resume_file(
+        message, result, resume_text = await process_resume_file(
             file_bytes=file_bytes,
             filename=filename,
             file_size=file_size,
@@ -386,8 +406,9 @@ async def resume_file_handler(
         session.resume_counter -= 1
         return WAITING_FOR_RESUMES
 
-    # Store result
+    # Store result and extracted text in memory and DB
     session.resumes.append({"label": label, "result": result})
+    session.resume_texts.append(resume_text)
     if session.db_session_id:
         save_resume_result(session.db_session_id, user_id, label, result)
 
@@ -401,7 +422,8 @@ async def resume_file_handler(
         return await _ask_followup(update, context, session)
 
     await update.message.reply_text(
-        "Send another resume, or type /done to finish and see the comparison."
+        "Send another resume, or type /done to finish and see the comparison.\n"
+        "💬 You can also use /ask <question> to ask anything about your resume."
     )
     return WAITING_FOR_RESUMES
 
@@ -422,7 +444,8 @@ async def _ask_followup(
         await _safe_reply(
             update,
             "Thanks for all your answers! 🙌\n\n"
-            "Send another resume, or type */done* to finish.",
+            "Send another resume, or type */done* to finish.\n"
+            "💬 Or use */ask <question>* to ask anything about your resume.",
         )
         return WAITING_FOR_RESUMES
 
@@ -477,13 +500,13 @@ async def followup_skip_handler(
 
 
 # ---------------------------------------------------------------------------
-# /done — finalize the session
+# /done — finalize resume uploads, enter chat mode
 # ---------------------------------------------------------------------------
 
 async def done_handler(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
-    """Handle /done — show comparison summary and end the conversation."""
+    """Handle /done — show comparison summary and enter Q&A chat mode."""
     user_id = update.effective_user.id
     session = get_session(user_id)
 
@@ -501,11 +524,155 @@ async def done_handler(
 
     await _safe_reply(
         update,
-        "✅ *Session complete!*\n\n"
-        "Use /check to start a new evaluation or /history to see past results.",
+        "✅ *Analysis complete!*\n\n"
+        "💬 *You can now ask me anything about your resume and this job!*\n\n"
+        "For example:\n"
+        "  • \"How can I rewrite my summary for this role?\"\n"
+        "  • \"What skills should I add to improve my score?\"\n"
+        "  • \"Can you rewrite one of my bullet points?\"\n"
+        "  • \"What courses should I prioritize?\"\n\n"
+        "Type your question below, or:\n"
+        "  /check — Start a new evaluation\n"
+        "  /exit — Clear this session\n"
+        "  /history — View past results",
+    )
+    # Stay in WAITING_FOR_CHAT — do NOT clear the session so context is preserved
+    return WAITING_FOR_CHAT
+
+
+# ---------------------------------------------------------------------------
+# /ask — ask a question during WAITING_FOR_RESUMES or WAITING_FOR_CHAT
+# ---------------------------------------------------------------------------
+
+async def ask_handler(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    """
+    Handle /ask <question> command.
+
+    Works in both WAITING_FOR_RESUMES (during upload) and WAITING_FOR_CHAT
+    (after /done). The question is answered using the full session context
+    (JD + resume text + analysis results + conversation history).
+    """
+    user_id = update.effective_user.id
+    session = get_session(user_id)
+
+    # Extract question from command args
+    raw = update.message.text or ""
+    # Remove /ask prefix and any bot mention (e.g. /ask@MyBot)
+    parts = raw.split(None, 1)
+    question = parts[1].strip() if len(parts) > 1 else ""
+
+    if not question:
+        await _safe_reply(
+            update,
+            "💬 *Usage:* `/ask <your question>`\n\n"
+            "For example: `/ask How can I improve my resume summary?`",
+        )
+        # Return the current state unchanged
+        return WAITING_FOR_RESUMES if session.resumes else WAITING_FOR_JD
+
+    if not session.job_description:
+        await _safe_reply(
+            update,
+            "⚠️ No active session. Use /check to start a resume evaluation first.",
+        )
+        return ConversationHandler.END
+
+    await _send_typing(update, context)
+
+    # Build analysis results list from session
+    analysis_results = [r["result"] for r in session.resumes]
+
+    answer = answer_resume_question(
+        question=question,
+        job_description=session.job_description,
+        resume_texts=session.resume_texts,
+        analysis_results=analysis_results,
+        chat_history=session.chat_history,
     )
 
+    # Store in chat history for multi-turn context
+    session.chat_history.append({"role": "user", "content": question})
+    session.chat_history.append({"role": "assistant", "content": answer})
+
+    await _safe_reply(update, answer, parse_mode=None)
+
+    # Return to the same state we were in
+    if not session.resumes:
+        return WAITING_FOR_RESUMES
+    # If already in chat mode, stay there; otherwise stay in resume upload mode
+    return WAITING_FOR_CHAT if update.message.text and "/ask" in update.message.text else WAITING_FOR_RESUMES
+
+
+# ---------------------------------------------------------------------------
+# WAITING_FOR_CHAT — free-form Q&A after /done
+# ---------------------------------------------------------------------------
+
+async def chat_handler(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    """
+    Handle any text message in WAITING_FOR_CHAT state.
+
+    After the user types /done, all plain text messages are treated as
+    career/resume questions. The LLM answers using the full session context
+    (JD, resume text(s), analysis results, and conversation history).
+    """
+    user_id = update.effective_user.id
+    session = get_session(user_id)
+
+    question = (update.message.text or "").strip()
+
+    if not question:
+        return WAITING_FOR_CHAT
+
+    if not session.job_description:
+        await _safe_reply(
+            update,
+            "⚠️ No active session context. Use /check to start a new evaluation.",
+        )
+        return ConversationHandler.END
+
+    await _send_typing(update, context)
+
+    # Build analysis results list from session
+    analysis_results = [r["result"] for r in session.resumes]
+
+    answer = answer_resume_question(
+        question=question,
+        job_description=session.job_description,
+        resume_texts=session.resume_texts,
+        analysis_results=analysis_results,
+        chat_history=session.chat_history,
+    )
+
+    # Append to chat history for multi-turn memory
+    session.chat_history.append({"role": "user", "content": question})
+    session.chat_history.append({"role": "assistant", "content": answer})
+
+    await _safe_reply(update, answer, parse_mode=None)
+
+    return WAITING_FOR_CHAT
+
+
+# ---------------------------------------------------------------------------
+# /exit — exit chat mode and clear session
+# ---------------------------------------------------------------------------
+
+async def exit_handler(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    """Exit chat mode, clear the session, and prompt the user to start fresh."""
+    user_id = update.effective_user.id
     clear_session(user_id)
+
+    await _safe_reply(
+        update,
+        "🚪 *Chat session ended.*\n\n"
+        "Your session data has been cleared.\n"
+        "Use /check to start a new resume evaluation, or /history to view past results.",
+    )
     return ConversationHandler.END
 
 

@@ -51,7 +51,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Import project modules (after env is loaded)
 # ---------------------------------------------------------------------------
-from bot.conversation import WAITING_FOR_JD, WAITING_FOR_RESUMES, WAITING_FOR_FOLLOWUP
+from bot.conversation import WAITING_FOR_JD, WAITING_FOR_RESUMES, WAITING_FOR_FOLLOWUP, WAITING_FOR_CHAT
 from bot.handlers import (
     start_handler,
     help_handler,
@@ -62,6 +62,9 @@ from bot.handlers import (
     resume_file_handler,
     done_handler,
     cancel_handler,
+    exit_handler,
+    ask_handler,
+    chat_handler,
     history_handler,
     followup_answer_handler,
     followup_skip_handler,
@@ -160,6 +163,7 @@ def build_application(token: str) -> Application:
             WAITING_FOR_RESUMES: [
                 CommandHandler("done", done_handler),
                 CommandHandler("skip", followup_skip_handler),
+                CommandHandler("ask", ask_handler),
                 MessageHandler(document_filter, resume_file_handler),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, resume_text_handler),
             ],
@@ -167,10 +171,20 @@ def build_application(token: str) -> Application:
             WAITING_FOR_FOLLOWUP: [
                 CommandHandler("skip", followup_skip_handler),
                 CommandHandler("done", done_handler),
+                CommandHandler("ask", ask_handler),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, followup_answer_handler),
             ],
+            # State: free-form Q&A chat after /done
+            WAITING_FOR_CHAT: [
+                CommandHandler("ask", ask_handler),
+                CommandHandler("exit", exit_handler),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, chat_handler),
+            ],
         },
-        fallbacks=[CommandHandler("cancel", cancel_handler)],
+        fallbacks=[
+            CommandHandler("cancel", cancel_handler),
+            CommandHandler("exit", exit_handler),
+        ],
         allow_reentry=True,  # Lets users restart /check even mid-session
     )
 
@@ -183,6 +197,7 @@ def build_application(token: str) -> Application:
     app.add_handler(CommandHandler("help", help_handler))
     app.add_handler(CommandHandler("history", history_handler))
     app.add_handler(CommandHandler("cancel", cancel_handler))
+    app.add_handler(CommandHandler("exit", exit_handler))
 
     # Catch-all for messages outside any active conversation
     app.add_handler(
@@ -217,10 +232,12 @@ async def post_init(application: Application) -> None:
     commands = [
         BotCommand("start", "Welcome message and overview"),
         BotCommand("check", "Start a new resume evaluation"),
-        BotCommand("done", "Finish uploading resumes and see results"),
+        BotCommand("done", "Finish uploading resumes and enter chat mode"),
+        BotCommand("ask", "Ask a question about your resume"),
         BotCommand("history", "View your past scored resumes"),
         BotCommand("skip", "Skip the current follow-up question"),
         BotCommand("cancel", "Cancel the current session"),
+        BotCommand("exit", "Exit chat mode and clear session"),
         BotCommand("help", "Show usage instructions"),
     ]
     await application.bot.set_my_commands(commands)

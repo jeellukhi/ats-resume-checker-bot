@@ -216,7 +216,7 @@ def _call_anthropic(prompt: str) -> str:
 # Google Gemini backend
 # ---------------------------------------------------------------------------
 
-def _call_gemini(prompt: str) -> str:
+def _call_gemini(prompt: str, force_json: bool = True) -> str:
     """
     Send a prompt to Google Gemini and return the raw text response.
 
@@ -275,7 +275,9 @@ def _call_gemini(prompt: str) -> str:
                 config=types.GenerateContentConfig(
                     temperature=0.2,
                     max_output_tokens=4096,
-                    response_mime_type="application/json",
+                    **({
+                        "response_mime_type": "application/json"
+                    } if force_json else {}),
                 ),
             )
             if response and response.text:
@@ -481,7 +483,7 @@ def get_followup_acknowledgement(question: str, answer: str) -> str:
 
     try:
         if provider == "gemini":
-            return _call_gemini(prompt)
+            return _call_gemini(prompt, force_json=False)
         elif provider == "anthropic":
             return _call_anthropic(prompt)
         else:
@@ -491,4 +493,93 @@ def get_followup_acknowledgement(question: str, answer: str) -> str:
         return (
             "Thanks for sharing that! Make sure to include this experience in "
             "your resume to strengthen your match for the role."
+        )
+
+
+def answer_resume_question(
+    question: str,
+    job_description: str,
+    resume_texts: list[str],
+    analysis_results: list[dict],
+    chat_history: list[dict],
+) -> str:
+    """
+    Answer a free-form career/resume question from the user.
+
+    Uses the RESUME_CHAT_PROMPT with full context: JD, resume text(s),
+    analysis results, and multi-turn conversation history.
+
+    This call uses plain-text mode (not JSON) — the result is sent directly
+    to the user as a conversational message.
+
+    Args:
+        question: The user's question.
+        job_description: JD text from the session.
+        resume_texts: Extracted plain text for each submitted resume.
+        analysis_results: List of ATSResult dicts (one per resume).
+        chat_history: Running conversation history as list of
+                      {"role": "user" | "assistant", "content": str}.
+
+    Returns:
+        Plain text answer from the LLM.
+    """
+    from core.prompts import RESUME_CHAT_PROMPT  # lazy import
+
+    # Build resume context (cap each resume to keep within token limits)
+    if resume_texts:
+        parts = []
+        for i, text in enumerate(resume_texts, 1):
+            label = f"Resume {i}" if len(resume_texts) > 1 else "Resume"
+            parts.append(f"--- {label} ---\n{text[:3000]}")
+        resume_context = "\n\n".join(parts)
+    else:
+        resume_context = "No resume text available."
+
+    # Build concise analysis summary
+    if analysis_results:
+        summary_lines = []
+        for i, r in enumerate(analysis_results, 1):
+            score = r.get("score", "N/A")
+            gaps = r.get("missing_keywords", [])
+            gaps_str = ", ".join(gaps[:6]) if gaps else "None identified"
+            summary_lines.append(
+                f"Resume {i}: ATS Score = {score}/100 | Missing keywords: {gaps_str}"
+            )
+        analysis_summary = "\n".join(summary_lines)
+    else:
+        analysis_summary = "No analysis completed yet."
+
+    # Build conversation history string (last 10 messages for context)
+    if chat_history:
+        history_lines = []
+        for msg in chat_history[-10:]:
+            role_label = "Candidate" if msg["role"] == "user" else "Coach"
+            history_lines.append(f"{role_label}: {msg['content']}")
+        history_str = "\n".join(history_lines)
+    else:
+        history_str = "(No previous conversation in this session)"
+
+    prompt = RESUME_CHAT_PROMPT.format(
+        job_description=job_description[:2500],
+        resume_context=resume_context,
+        analysis_summary=analysis_summary,
+        chat_history=history_str,
+        question=question,
+    )
+
+    provider = os.getenv("LLM_PROVIDER", "gemini").lower().strip()
+    logger.info("Answering resume question with provider: %s", provider)
+
+    try:
+        if provider == "gemini":
+            return _call_gemini(prompt, force_json=False)
+        elif provider == "anthropic":
+            return _call_anthropic(prompt)
+        else:
+            return _call_openai(prompt)
+    except Exception as exc:
+        logger.warning("Resume Q&A LLM call failed: %s", exc)
+        return (
+            "I'm sorry, I couldn't process your question right now. "
+            "Please try again in a moment."
         )

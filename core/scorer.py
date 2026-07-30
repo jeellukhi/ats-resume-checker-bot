@@ -158,9 +158,9 @@ async def process_resume_file(
     file_size: int,
     job_description: str,
     resume_label: str = "Resume",
-) -> tuple[str, ATSResult]:
+) -> tuple[str, ATSResult, str]:
     """
-    Full pipeline: validate file → parse text → call LLM → return formatted message.
+    Full pipeline: validate file -> parse text -> call LLM -> return formatted message.
 
     This is the main function the bot calls for uploaded file resumes.
 
@@ -172,7 +172,8 @@ async def process_resume_file(
         resume_label: Display label for this resume.
 
     Returns:
-        Tuple of (formatted_message: str, raw_result: ATSResult).
+        Tuple of (formatted_message: str, raw_result: ATSResult, resume_text: str).
+        The resume_text is the extracted plain text, retained for chat context.
 
     Raises:
         ValueError: On file too large, unsupported format, parse failure, or
@@ -199,14 +200,14 @@ async def process_resume_file(
 
     # Format for Telegram
     message = format_ats_result(result, resume_label=resume_label)
-    return message, result
+    return message, result, resume_text
 
 
 async def process_resume_text(
     resume_text: str,
     job_description: str,
     resume_label: str = "Resume",
-) -> tuple[str, ATSResult]:
+) -> tuple[str, ATSResult, str]:
     """
     Full pipeline for pasted plain-text resumes.
 
@@ -216,10 +217,11 @@ async def process_resume_text(
         resume_label: Display label for this resume.
 
     Returns:
-        Tuple of (formatted_message: str, raw_result: ATSResult).
+        Tuple of (formatted_message: str, raw_result: ATSResult, resume_text: str).
+        The resume_text is returned (after length validation) for chat context.
     """
     resume_text = validate_text_length(resume_text, label="Resume", min_chars=100)
     logger.info("Processing pasted resume text (%d chars).", len(resume_text))
     result = analyze_resume(job_description, resume_text)
     message = format_ats_result(result, resume_label=resume_label)
-    return message, result
+    return message, result, resume_text

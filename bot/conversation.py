@@ -26,6 +26,9 @@ WAITING_FOR_RESUMES = 2
 # Waiting for the user to answer a follow-up question
 WAITING_FOR_FOLLOWUP = 3
 
+# Free-form Q&A chat mode — active after /done (or whenever chat is triggered)
+WAITING_FOR_CHAT = 4
+
 
 # ---------------------------------------------------------------------------
 # In-memory per-user session data
@@ -39,17 +42,26 @@ class UserSession:
     Attributes:
         job_description: The JD text provided by the user.
         resumes: List of dicts, each with 'label' and 'result' (ATSResult).
+        resume_texts: Extracted plain text of each submitted resume (used as
+                      context for the Q&A chat so the LLM can answer specific
+                      questions about the candidate's actual content).
         db_session_id: The SQLite session row ID (set after JD is saved).
         current_questions: The follow-up questions from the last scored resume.
         current_question_index: Which follow-up question is currently active.
+        resume_counter: Auto-increment counter for labelling unnamed resumes.
+        chat_history: Multi-turn Q&A history stored as a list of dicts with
+                      keys "role" ("user" or "assistant") and "content" (str).
+                      Used to give the LLM conversation context.
     """
 
     job_description: str = ""
     resumes: list[dict[str, Any]] = field(default_factory=list)
+    resume_texts: list[str] = field(default_factory=list)
     db_session_id: int | None = None
     current_questions: list[str] = field(default_factory=list)
     current_question_index: int = 0
     resume_counter: int = 0  # increments for auto-labelling resumes
+    chat_history: list[dict[str, str]] = field(default_factory=list)
 
 
 # Global dict mapping user_id → UserSession
