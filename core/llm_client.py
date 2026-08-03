@@ -289,11 +289,18 @@ def _call_gemini(prompt: str, force_json: bool = True) -> str:
             is_fallbackable = (
                 "429" in err_str
                 or "404" in err_str
+                or "503" in err_str
+                or "500" in err_str
                 or "not found" in err_str
                 or "rate limit" in err_str
                 or "quota" in err_str
                 or "resource_exhausted" in err_str
                 or "resourceexhausted" in err_str
+                or "unavailable" in err_str
+                or "overloaded" in err_str
+                or "high demand" in err_str
+                or "service unavailable" in err_str
+                or "try again later" in err_str
             )
 
             if is_fallbackable:
@@ -336,6 +343,16 @@ def _call_gemini(prompt: str, force_json: bool = True) -> str:
             "Google Gemini rate limit / daily quota exceeded across all models.\n\n"
             "Please wait a few minutes before trying again, or get a new API key at "
             "https://aistudio.google.com/apikey"
+        ) from exc
+    elif (
+        "503" in err_str
+        or "unavailable" in err_str
+        or "overloaded" in err_str
+        or "high demand" in err_str
+    ):
+        raise RuntimeError(
+            "All Gemini models are temporarily overloaded (503).\n\n"
+            "This is a temporary issue on Google's side — please wait 30–60 seconds and try again."
         ) from exc
     else:
         raise RuntimeError(
