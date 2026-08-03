@@ -62,6 +62,7 @@ class UserSession:
     current_question_index: int = 0
     resume_counter: int = 0  # increments for auto-labelling resumes
     chat_history: list[dict[str, str]] = field(default_factory=list)
+    in_chat_mode: bool = False  # True once the user types /done and enters WAITING_FOR_CHAT
 
 
 # Global dict mapping user_id → UserSession

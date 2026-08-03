@@ -522,6 +522,9 @@ async def done_handler(
         summary = format_comparison_summary(session.resumes)
         await _safe_reply(update, summary)
 
+    # Mark session as in chat mode so ask_handler knows which state to return to
+    session.in_chat_mode = True
+
     await _safe_reply(
         update,
         "✅ *Analysis complete!*\n\n"
@@ -598,11 +601,12 @@ async def ask_handler(
 
     await _safe_reply(update, answer, parse_mode=None)
 
-    # Return to the same state we were in
-    if not session.resumes:
-        return WAITING_FOR_RESUMES
-    # If already in chat mode, stay there; otherwise stay in resume upload mode
-    return WAITING_FOR_CHAT if update.message.text and "/ask" in update.message.text else WAITING_FOR_RESUMES
+    # Return to the correct state:
+    # - WAITING_FOR_CHAT if user has already typed /done and entered chat mode
+    # - WAITING_FOR_RESUMES if user is still uploading resumes
+    # NOTE: We must NOT use update.message.text to detect this — that string
+    # always contains "/ask" so that check was always True (the original bug).
+    return WAITING_FOR_CHAT if session.in_chat_mode else WAITING_FOR_RESUMES
 
 
 # ---------------------------------------------------------------------------
@@ -659,6 +663,31 @@ async def chat_handler(
 # ---------------------------------------------------------------------------
 # /exit — exit chat mode and clear session
 # ---------------------------------------------------------------------------
+
+async def chat_file_handler(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    """
+    Handle a file uploaded while in WAITING_FOR_CHAT state.
+
+    In chat mode (after /done), file uploads are not analyzed. Instead,
+    guide the user to start a new /check session.
+    """
+    filename = ""
+    if update.message.document:
+        filename = update.message.document.file_name or "the file"
+
+    await _safe_reply(
+        update,
+        f"📎 I received *{filename}*, but I'm currently in *chat mode*.\n\n"
+        "In chat mode you can ask me questions about your *already-analyzed* resume.\n\n"
+        "To analyze a new resume:\n"
+        "  • Type /check to start a fresh evaluation session\n"
+        "  • Or type /exit to clear this session first, then /check\n\n"
+        "💬 Or just type your question and I'll answer it!",
+    )
+    return WAITING_FOR_CHAT
+
 
 async def exit_handler(
     update: Update, context: ContextTypes.DEFAULT_TYPE

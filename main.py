@@ -65,6 +65,7 @@ from bot.handlers import (
     exit_handler,
     ask_handler,
     chat_handler,
+    chat_file_handler,
     history_handler,
     followup_answer_handler,
     followup_skip_handler,
@@ -178,6 +179,8 @@ def build_application(token: str) -> Application:
             WAITING_FOR_CHAT: [
                 CommandHandler("ask", ask_handler),
                 CommandHandler("exit", exit_handler),
+                CommandHandler("done", done_handler),
+                MessageHandler(document_filter, chat_file_handler),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, chat_handler),
             ],
         },
