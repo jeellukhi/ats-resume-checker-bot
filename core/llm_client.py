@@ -542,31 +542,50 @@ def answer_resume_question(
     """
     from core.prompts import RESUME_CHAT_PROMPT  # lazy import
 
-    # Build resume context (cap each resume to keep within token limits)
+    # Build resume context — increased cap to 6000 chars per resume so the full
+    # resume is visible to the LLM (most resumes are 2000-5000 chars as plain text)
     if resume_texts:
         parts = []
         for i, text in enumerate(resume_texts, 1):
             label = f"Resume {i}" if len(resume_texts) > 1 else "Resume"
-            parts.append(f"--- {label} ---\n{text[:3000]}")
+            parts.append(f"--- {label} ---\n{text[:6000]}")
         resume_context = "\n\n".join(parts)
     else:
-        resume_context = "No resume text available."
+        resume_context = "No resume text available yet."
 
-    # Build concise analysis summary
+    # Build rich analysis summary — include all fields so the LLM can answer
+    # questions about strengths, gaps, suggestions, and courses
     if analysis_results:
-        summary_lines = []
+        summary_parts = []
         for i, r in enumerate(analysis_results, 1):
+            label = f"Resume {i}" if len(analysis_results) > 1 else "Resume"
             score = r.get("score", "N/A")
-            gaps = r.get("missing_keywords", [])
-            gaps_str = ", ".join(gaps[:6]) if gaps else "None identified"
-            summary_lines.append(
-                f"Resume {i}: ATS Score = {score}/100 | Missing keywords: {gaps_str}"
-            )
-        analysis_summary = "\n".join(summary_lines)
-    else:
-        analysis_summary = "No analysis completed yet."
 
-    # Build conversation history string (last 10 messages for context)
+            strengths = r.get("strengths", [])
+            strengths_str = "; ".join(strengths) if strengths else "None listed"
+
+            gaps = r.get("missing_keywords", [])
+            gaps_str = ", ".join(gaps) if gaps else "None identified"
+
+            suggestions = r.get("suggestions", [])
+            suggestions_str = " | ".join(suggestions[:4]) if suggestions else "None listed"
+
+            courses = r.get("course_suggestions", [])
+            courses_str = " | ".join(courses) if courses else "None listed"
+
+            summary_parts.append(
+                f"{label}:\n"
+                f"  ATS Score: {score}/100\n"
+                f"  Strengths: {strengths_str}\n"
+                f"  Missing Keywords/Gaps: {gaps_str}\n"
+                f"  Improvement Suggestions: {suggestions_str}\n"
+                f"  Recommended Courses: {courses_str}"
+            )
+        analysis_summary = "\n\n".join(summary_parts)
+    else:
+        analysis_summary = "No analysis completed yet — the user has not submitted a resume for scoring."
+
+    # Build conversation history string (last 10 messages for multi-turn memory)
     if chat_history:
         history_lines = []
         for msg in chat_history[-10:]:
@@ -577,7 +596,7 @@ def answer_resume_question(
         history_str = "(No previous conversation in this session)"
 
     prompt = RESUME_CHAT_PROMPT.format(
-        job_description=job_description[:2500],
+        job_description=job_description[:3000],
         resume_context=resume_context,
         analysis_summary=analysis_summary,
         chat_history=history_str,
